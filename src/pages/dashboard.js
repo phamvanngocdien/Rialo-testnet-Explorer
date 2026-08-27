@@ -187,7 +187,7 @@ export function renderDashboard(container) {
 
 function startPolling() {
   stopPolling();
-  pollTimer = setInterval(loadDashboardData, 1000);
+  pollTimer = setInterval(loadDashboardData, 3500);
 }
 
 function stopPolling() {
@@ -227,7 +227,7 @@ function handleVisibilityChange() {
     stopAgeTicker();
   } else {
     loadDashboardData();
-    pollTimer = setInterval(loadDashboardData, 1000);
+    pollTimer = setInterval(loadDashboardData, 3500);
     startAgeTicker();
   }
 }
@@ -442,12 +442,12 @@ async function renderRecentBlocks(currentHeight) {
 
   try {
     const heights = Array.from({ length: 5 }, (_, i) => currentHeight - i);
-    const blocks = await Promise.all(heights.map(h => rpc.getBlock(h).catch(() => null)));
+    const blocks = await Promise.all(heights.map(h => rpc.getBlockSummary(h).catch(() => null)));
 
     let rows = '';
     blocks.forEach((block, idx) => {
       const height = heights[idx];
-      const txs = block?.transactions?.length || 0;
+      const txs = block?.txCount ?? (block?.transactions?.length || 0);
       const bTime = block?.blockTime ? (block.blockTime < 10000000000 ? block.blockTime * 1000 : block.blockTime) : getOrCreateBlockTime(height);
       const timeAgo = formatTimeAgo(bTime);
       const timeFull = formatDateTime(bTime);

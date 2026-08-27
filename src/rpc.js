@@ -322,7 +322,82 @@ class RialoRpcClient {
     return this.call('getConnectedValidators');
   }
 
-  // --- Block & Transaction Query Methods ---
+  /**
+   * Lightweight block summary (only signatures and header metadata, not full transaction payloads).
+   * Ideal for block lists, dashboard feeds, and transaction counters.
+   * @param {number} blockHeight
+   */
+  async getBlockSummary(blockHeight) {
+    const h = Number(blockHeight);
+    const summaryCacheKey = `block_summary_${h}`;
+    const cachedSummary = this._getCached(summaryCacheKey);
+    if (cachedSummary !== undefined) return cachedSummary;
+
+    // If full block is already cached, derive lightweight summary directly without network call
+    const fullBlockCached = this._getCached(`block_${h}`);
+    if (fullBlockCached) {
+      const summary = {
+        blockHeight: h,
+        blockTime: fullBlockCached.blockTime || this.getOrCreateBlockTime(h),
+        blockhash: fullBlockCached.blockhash || null,
+        parentSlot: fullBlockCached.parentSlot || null,
+        txCount: Array.isArray(fullBlockCached.transactions)
+          ? fullBlockCached.transactions.length
+          : (Array.isArray(fullBlockCached.signatures) ? fullBlockCached.signatures.length : 0),
+        signatures: Array.isArray(fullBlockCached.signatures)
+          ? fullBlockCached.signatures
+          : (Array.isArray(fullBlockCached.transactions)
+              ? fullBlockCached.transactions.map(t => (t?.transaction?.signatures?.[0] || t?.transaction?.signature || t?.signature)).filter(Boolean)
+              : [])
+      };
+      this._setCache(summaryCacheKey, summary, null);
+      return summary;
+    }
+
+    return this._dedupCall(summaryCacheKey, async () => {
+      let res = null;
+      try {
+        // Request with lightweight transactionDetails: 'signatures' to minimize bandwidth
+        res = await this.call('getBlock', [{
+          blockHeight: h,
+          config: {
+            transactionDetails: 'signatures',
+            rewards: false
+          }
+        }]);
+      } catch (e) {
+        // Fallback with direct params if node does not use config wrapper
+        try {
+          res = await this.call('getBlock', [{
+            blockHeight: h,
+            transactionDetails: 'signatures',
+            rewards: false
+          }]);
+        } catch (e2) {
+          res = null;
+        }
+      }
+
+      const blockData = res?.value ?? res ?? null;
+      if (!blockData) return null;
+
+      const txCount = Array.isArray(blockData.signatures)
+        ? blockData.signatures.length
+        : (Array.isArray(blockData.transactions) ? blockData.transactions.length : 0);
+
+      const summary = {
+        blockHeight: h,
+        blockTime: blockData.blockTime ? (blockData.blockTime < 10000000000 ? blockData.blockTime * 1000 : blockData.blockTime) : this.getOrCreateBlockTime(h),
+        blockhash: blockData.blockhash || null,
+        parentSlot: blockData.parentSlot || null,
+        txCount,
+        signatures: blockData.signatures || []
+      };
+
+      this._setCache(summaryCacheKey, summary, null); // Confirmed block summary is immutable
+      return summary;
+    });
+  }
 
   /**
    * Get Block by height (permanently cached for finalized blocks).
@@ -422,11 +497,20 @@ class RialoRpcClient {
           }
         }
 
-        // If no transactions found via block scan or no forced height, use the native fast getTransactions RPC
-        if (txList.length === 0) {
-          const res = await this.call('getTransactions', [{}]);
+        // If block scanning resulted in fewer transactions than requested limit, supplement with native fast getTransactions RPC
+        if (txList.length < limit) {
+          const needed = limit - txList.length;
+          const seenSigs = new Set(txList.map(t => t.signature));
+
+          const res = await this.call('getTransactions', [{}]).catch(() => null);
           const rawList = res?.value || (Array.isArray(res) ? res : []);
-          const slice = rawList.slice(0, limit);
+          
+          const filtered = rawList.filter(item => {
+            const sig = typeof item === 'string' ? item : item?.signature;
+            return sig && !seenSigs.has(sig);
+          });
+
+          const slice = filtered.slice(0, needed);
 
           const hydrated = await Promise.all(
             slice.map(async (item) => {

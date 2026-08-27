@@ -30,14 +30,20 @@ export async function renderAccount(container, address) {
   `;
 
   try {
-    const [accountInfoRes, balanceRes, signaturesRes] = await Promise.allSettled([
+    // Fetch account info and initial page of signatures (limit 50) in parallel
+    const [accountInfoRes, signaturesRes] = await Promise.allSettled([
       rpc.getAccountInfo(address),
-      rpc.getBalance(address),
-      rpc.getSignaturesForAddress(address, 1000),
+      rpc.getSignaturesForAddress(address, 50),
     ]);
 
     const accountInfo = accountInfoRes.status === 'fulfilled' ? accountInfoRes.value : null;
-    const balanceKelvin = balanceRes.status === 'fulfilled' ? balanceRes.value : 0;
+
+    // Extract balance directly from accountInfo to prevent redundant RPC call, fallback only if missing
+    let balanceKelvin = accountInfo ? (accountInfo.lamports ?? accountInfo.balance ?? accountInfo.kelvin ?? accountInfo.kelvins) : null;
+    if (balanceKelvin === undefined || balanceKelvin === null) {
+      balanceKelvin = await rpc.getBalance(address).catch(() => 0);
+    }
+
     const balanceDisplay = formatDecimalOnly(balanceKelvin, 6);
     const rawSignatures = signaturesRes.status === 'fulfilled' ? signaturesRes.value : [];
 

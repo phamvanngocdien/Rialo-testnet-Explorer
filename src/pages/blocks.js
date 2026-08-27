@@ -101,13 +101,13 @@ export async function renderBlocksList(container) {
       card.innerHTML = tableRowSkeleton(5, Math.min(heights.length, 12));
 
       const blocks = await Promise.all(
-        heights.map(h => rpc.getBlock(h).catch(() => null))
+        heights.map(h => rpc.getBlockSummary(h).catch(() => null))
       );
 
       let rows = '';
       blocks.forEach((block, index) => {
         const height = heights[index];
-        const txCount = block?.transactions ? block.transactions.length : 0;
+        const txCount = block?.txCount ?? (block?.transactions ? block.transactions.length : 0);
         const bTime = block?.blockTime ? (block.blockTime < 10000000000 ? block.blockTime * 1000 : block.blockTime) : getOrCreateBlockTime(height);
         const timeAgo = formatTimeAgo(bTime);
         const timeFull = formatDateTime(bTime);
