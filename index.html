@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rialo Testnet Explorer — Subzero Labs</title>
+  <meta name="description" content="Immersive, high-performance blockchain explorer for Rialo Testnet by Subzero Labs. Real-time blocks, transactions, validators, account balances, and faucet.">
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+  <!-- Ambient Immersive Background Visuals -->
+  <div class="ambient-canvas">
+    <div class="ambient-glow glow-top-right"></div>
+    <div class="ambient-glow glow-bottom-left"></div>
+    <div class="ambient-glow glow-center"></div>
+    
+    <!-- SVG Vector Organic Curves (SubzeroLabs Aesthetic) -->
+    <svg class="ambient-svg-curve top-right-blob" viewBox="0 0 400 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M400 0C350 0 320 40 280 40C220 40 180 80 180 140C180 180 150 200 120 200C90 200 60 220 60 240H400V0Z" fill="#EDE8DC" fill-opacity="0.04" />
+      <path d="M380 20C340 20 310 50 270 50C220 50 190 90 190 140C190 170 170 190 140 190C110 190 80 210 80 240" stroke="#EDE8DC" stroke-opacity="0.12" stroke-width="2" stroke-linecap="round" />
+      <circle cx="230" cy="50" r="14" stroke="#EDE8DC" stroke-opacity="0.2" stroke-width="1.5" />
+    </svg>
+
+    <svg class="ambient-svg-curve bottom-left-ribbon" viewBox="0 0 500 300" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M0 240C40 240 60 210 80 210C110 210 130 250 160 250C190 250 210 220 240 220C280 220 310 260 360 260C410 260 450 230 500 230" stroke="#EDE8DC" stroke-opacity="0.15" stroke-width="2" stroke-linecap="round" />
+      <path d="M0 200C30 200 50 170 80 170C120 170 140 220 170 220C200 220 230 180 260 180C300 180 340 230 380 230C420 230 460 190 500 190" stroke="#EDE8DC" stroke-opacity="0.08" stroke-width="1.5" stroke-linecap="round" />
+      <circle cx="90" cy="170" r="8" fill="#EDE8DC" fill-opacity="0.15" />
+    </svg>
+  </div>
+
+  <div id="app" class="app-layout">
+    <!-- Top Global Navigation Header -->
+    <header class="header" role="banner">
+      <div class="header-container">
+        <!-- Logo & Branding -->
+        <a href="#/" class="brand-logo" id="brand-logo">
+          <div class="logo-icon-wrapper">
+            <img src="/logo.svg" alt="Rialo Explorer Logo" class="logo-img" width="38" height="38" />
+          </div>
+          <div class="brand-text">
+            <div class="brand-name">
+              <span>Rialo Explorer</span>
+              <span class="brand-badge">TESTNET</span>
+            </div>
+          </div>
+        </a>
+
+        <!-- Main Navigation Links -->
+        <nav class="nav-links" id="main-nav" role="navigation" aria-label="Main Navigation">
+          <a href="#/" class="nav-item active" data-route="dashboard">
+            <i class="fa-solid fa-gauge"></i>
+            <span>Dashboard</span>
+          </a>
+          <a href="#/blocks" class="nav-item" data-route="blocks">
+            <i class="fa-solid fa-cube"></i>
+            <span>Blocks</span>
+          </a>
+          <a href="#/txs" class="nav-item" data-route="txs">
+            <i class="fa-solid fa-bolt"></i>
+            <span>Transactions</span>
+          </a>
+          <a href="#/validators" class="nav-item" data-route="validators">
+            <i class="fa-solid fa-shield-halved"></i>
+            <span>Validators</span>
+          </a>
+        </nav>
+
+        <!-- Right Header Elements -->
+        <div class="header-right">
+          <!-- Compact Search Bar -->
+          <div class="header-search-bar">
+            <form id="global-search-form" class="search-form">
+              <i class="fa-solid fa-magnifying-glass search-icon"></i>
+              <input 
+                type="text" 
+                id="global-search-input" 
+                placeholder="Search Address / Tx / Block..." 
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <span class="search-shortcut-hint">/</span>
+            </form>
+          </div>
+
+          <!-- Network Indicator Pill (Testnet Only) -->
+          <div class="network-indicator-pill" title="Connected to Rialo Testnet (testnet.rialo.io:4101)">
+            <span class="pulse-dot"></span>
+            <span class="network-name">Testnet</span>
+          </div>
+
+          <!-- Mobile Menu Toggle -->
+          <button id="mobile-menu-btn" class="mobile-menu-btn" aria-label="Toggle mobile navigation menu" aria-expanded="false">
+            <i class="fa-solid fa-bars" aria-hidden="true"></i>
+          </button>
+        </div>
+      </div>
+
+      <!-- Mobile Dropdown Navigation -->
+      <div id="mobile-nav" class="mobile-nav hidden">
+        <div class="mobile-search-wrapper">
+          <form id="mobile-search-form" class="search-form">
+            <i class="fa-solid fa-magnifying-glass search-icon"></i>
+            <input type="text" id="mobile-search-input" placeholder="Search Address / Tx / Block..." />
+            <button type="submit" class="search-submit-btn"><i class="fa-solid fa-arrow-right"></i></button>
+          </form>
+        </div>
+        <div class="mobile-links">
+          <a href="#/" class="mobile-nav-link" data-route="dashboard"><i class="fa-solid fa-gauge"></i> Dashboard</a>
+          <a href="#/blocks" class="mobile-nav-link" data-route="blocks"><i class="fa-solid fa-cube"></i> Blocks</a>
+          <a href="#/txs" class="mobile-nav-link" data-route="txs"><i class="fa-solid fa-bolt"></i> Transactions</a>
+          <a href="#/validators" class="mobile-nav-link" data-route="validators"><i class="fa-solid fa-shield-halved"></i> Validators</a>
+        </div>
+      </div>
+    </header>
+
+    <!-- Network Status Warning Banner -->
+    <div id="network-status-banner" class="network-status-banner hidden" role="alert">
+      <div class="network-banner-content">
+        <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+        <span>Unable to reach Rialo RPC endpoint. Retrying automatically...</span>
+        <button id="network-retry-btn" class="btn btn-secondary btn-sm">
+          <i class="fa-solid fa-rotate-right"></i> Retry
+        </button>
+      </div>
+    </div>
+
+    <!-- Main Dynamic Content Container -->
+    <main id="main-content" class="main-content" role="main">
+      <div class="page-loading-skeleton">
+        <div class="spinner-glow"></div>
+        <p>Connecting to Rialo Testnet Cluster...</p>
+      </div>
+    </main>
+
+    <!-- Global Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Immersive Footer with Subzero Labs Brand & Backer Aesthetics -->
+    <footer class="footer" role="contentinfo">
+      <div class="footer-backer-strip">
+        <span class="backer-label">Ecosystem & Backers</span>
+        <div class="backer-logos">
+          <span class="backer-pill"><i class="fa-solid fa-cube"></i> PANTERA</span>
+          <span class="backer-pill">#HASHED</span>
+          <span class="backer-pill">FABRIC</span>
+          <span class="backer-pill">COINBASE VENTURES</span>
+          <span class="backer-pill">MIRANA</span>
+          <span class="backer-pill">MYSTEN LABS</span>
+          <span class="backer-pill">SUSQUEHANNA</span>
+        </div>
+      </div>
+
+      <div class="footer-container">
+        <div class="footer-left">
+          <div class="footer-brand">
+            <span class="footer-logo">RIALO EXPLORER</span>
+            <span class="footer-ver" id="footer-version">RPC v0.18.1</span>
+          </div>
+          <p class="footer-desc">Next-generation real-time explorer for Rialo Testnet by Subzero Labs.</p>
+        </div>
+
+        <div class="footer-stats-live">
+          <div class="live-stat-pill">
+            <span class="live-indicator"></span>
+            <span>Endpoint: <strong id="footer-rpc-endpoint">testnet.rialo.io:4101</strong></span>
+          </div>
+          <div class="live-stat-pill">
+            <i class="fa-solid fa-signal text-beige"></i>
+            <span>Latency: <strong id="footer-latency">-- ms</strong></span>
+          </div>
+        </div>
+
+        <div class="footer-links">
+          <a href="https://docs.rialo.io" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-book"></i> Docs</a>
+          <a href="https://playground.rialo.io" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-flask"></i> Playground</a>
+          <a href="https://github.com/SubzeroLabs" target="_blank" rel="noopener noreferrer"><i class="fa-brands fa-github"></i> SubzeroLabs</a>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <span>© 2026 Rialo Community Explorer • Powered by Subzero Labs Architecture</span>
+      </div>
+    </footer>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
