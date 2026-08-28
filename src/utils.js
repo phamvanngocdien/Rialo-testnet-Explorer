@@ -364,3 +364,31 @@ export function drawSparkline(canvas, dataPoints, options = {}) {
   ctx.fillStyle = lineColor;
   ctx.fill();
 }
+
+/**
+ * Execute async mapping function over array items with limited concurrency.
+ * Prevents burst request spikes on RPC endpoints.
+ * @param {Array} items
+ * @param {number} limit
+ * @param {Function} fn
+ * @returns {Promise<Array>}
+ */
+export async function mapWithConcurrency(items, limit, fn) {
+  if (!items || items.length === 0) return [];
+  const results = new Array(items.length);
+  let idx = 0;
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      try {
+        results[i] = await fn(items[i], i);
+      } catch (err) {
+        results[i] = null;
+      }
+    }
+  }
+  const workerCount = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
+  return results;
+}
+
