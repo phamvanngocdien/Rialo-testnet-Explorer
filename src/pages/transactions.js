@@ -1,6 +1,7 @@
 import { rpc, getOrCreateBlockTime } from '../rpc.js';
 import { formatNumber, formatKelvin, formatTimeAgo, formatDateTime, truncateHash, copyToClipboard } from '../utils.js';
 import { tableRowSkeleton } from '../components/skeleton.js';
+import { getTotalKnownTransactions } from '../services/indexer.js';
 
 export async function renderTransactionsList(container) {
   const PAGE_SIZE = 50; // Item 5: 50 transactions per page
@@ -98,22 +99,22 @@ export async function renderTransactionsList(container) {
     isLoading = true;
 
     try {
-      if (page === 0 || topHeight === 0) {
+      if (totalTxCount === 0) {
         const [h, tCount] = await Promise.all([
-          rpc.getBlockHeight().catch(() => 2300000),
-          rpc.getTransactionCount().catch(() => 5000000)
+          rpc.getBlockHeight().catch(() => 0),
+          rpc.getTransactionCount().catch(() => 0)
         ]);
-        topHeight = h;
-        totalTxCount = tCount;
+        topHeight = h || 0;
+        totalTxCount = tCount || 0;
       }
-
-      const totalPages = Math.max(1, Math.ceil(topHeight / PAGE_SIZE));
-      const targetPage = Math.max(0, Math.min(page, totalPages - 1));
-      const forcedHeight = topHeight - (targetPage * PAGE_SIZE);
 
       card.innerHTML = tableRowSkeleton(8, 15);
 
-      const txs = await rpc.getTransactions(PAGE_SIZE, forcedHeight);
+      const targetPage = Math.max(0, page);
+      const txs = await rpc.getTransactions(PAGE_SIZE, null, targetPage);
+
+      const totalKnown = Math.max(totalTxCount || 0, getTotalKnownTransactions());
+      const totalPages = Math.max(1, Math.ceil(totalKnown / PAGE_SIZE));
 
       if (!txs || txs.length === 0) {
         card.innerHTML = `
@@ -219,7 +220,7 @@ export async function renderTransactionsList(container) {
       });
 
       currentPage = targetPage;
-      updatePaginationUI(targetPage, topHeight);
+      updatePaginationUI(targetPage, totalPages);
       startAgeTicker();
 
     } catch (err) {
@@ -239,8 +240,7 @@ export async function renderTransactionsList(container) {
     }
   }
 
-  function updatePaginationUI(page, maxHeight) {
-    const totalPages = Math.max(1, Math.ceil(maxHeight / PAGE_SIZE));
+  function updatePaginationUI(page, totalPages) {
     const firstBtn = container.querySelector('#txs-first-btn');
     const prevBtn = container.querySelector('#txs-prev-btn');
     const nextBtn = container.querySelector('#txs-next-btn');
@@ -266,7 +266,8 @@ export async function renderTransactionsList(container) {
     pageInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
-        const totalPages = Math.max(1, Math.ceil(topHeight / PAGE_SIZE));
+        const totalKnown = Math.max(totalTxCount || 0, getTotalKnownTransactions());
+        const totalPages = Math.max(1, Math.ceil(totalKnown / PAGE_SIZE));
         let p = parseInt(pageInput.value, 10);
         if (isNaN(p) || p < 1) p = 1;
         if (p > totalPages) p = totalPages;
@@ -275,7 +276,8 @@ export async function renderTransactionsList(container) {
     });
 
     pageInput.addEventListener('change', () => {
-      const totalPages = Math.max(1, Math.ceil(topHeight / PAGE_SIZE));
+      const totalKnown = Math.max(totalTxCount || 0, getTotalKnownTransactions());
+      const totalPages = Math.max(1, Math.ceil(totalKnown / PAGE_SIZE));
       let p = parseInt(pageInput.value, 10);
       if (isNaN(p) || p < 1) p = 1;
       if (p > totalPages) p = totalPages;
@@ -285,7 +287,7 @@ export async function renderTransactionsList(container) {
 
   // Event listeners
   container.querySelector('#refresh-txs-btn')?.addEventListener('click', () => {
-    topHeight = 0;
+    totalTxCount = 0;
     loadPage(0);
   });
 
@@ -302,7 +304,8 @@ export async function renderTransactionsList(container) {
   });
 
   container.querySelector('#txs-last-btn')?.addEventListener('click', () => {
-    const totalPages = Math.max(1, Math.ceil(topHeight / PAGE_SIZE));
+    const totalKnown = Math.max(totalTxCount || 0, getTotalKnownTransactions());
+    const totalPages = Math.max(1, Math.ceil(totalKnown / PAGE_SIZE));
     loadPage(totalPages - 1);
   });
 

@@ -4,7 +4,11 @@
  * Wire format verified against the official @rialo/ts-cdk SDK (Apache-2.0, subzero.xyz).
  */
 
-export const TESTNET_RPC_URL = 'https://testnet.rialo.io:4101';
+import { mapWithConcurrency } from './utils.js';
+import { registerBlockTransactions, addNetworkTransactions, getNetworkTransactions, getTotalKnownTransactions } from './services/indexer.js';
+import { fetchTransactionsFromSupabase } from './services/supabase.js';
+
+export const TESTNET_RPC_URL = import.meta.env.VITE_RPC_URL || 'https://testnet.rialo.io:4101';
 
 class RialoRpcClient {
   constructor() {
@@ -404,15 +408,19 @@ class RialoRpcClient {
    * @param {number} blockHeight
    */
   async getBlock(blockHeight) {
-    const cacheKey = `block_${blockHeight}`;
+    const h = Number(blockHeight);
+    const cacheKey = `block_${h}`;
     const cached = this._getCached(cacheKey);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      if (cached) registerBlockTransactions(cached, h);
+      return cached;
+    }
 
     return this._dedupCall(cacheKey, async () => {
       let res = null;
       try {
         res = await this.call('getBlock', [{
-          blockHeight: Number(blockHeight)
+          blockHeight: h
         }]);
       } catch (e) {
         res = null;
@@ -420,6 +428,7 @@ class RialoRpcClient {
       const blockData = res?.value ?? res ?? null;
       if (blockData) {
         this._setCache(cacheKey, blockData, null); // Permanent cache for confirmed blocks
+        registerBlockTransactions(blockData, h);
       }
       return blockData;
     });
@@ -446,78 +455,78 @@ class RialoRpcClient {
    * @param {number} [forcedHeight] - height to start scanning from
    * @returns {Promise<Array>} normalized real transaction entries
    */
-  async getTransactions(limit = 20, forcedHeight = null) {
-    const cacheKey = `txs_${limit}_${forcedHeight ?? 'latest'}`;
+  /**
+   * Get transactions across the Rialo network.
+   * Performs continuous multi-batch block scanning and indexer aggregation to ensure
+   * NO transactions are missed regardless of sparse block distribution.
+   *
+   * @param {number} limit - number of transactions to return (e.g. 20, 50, 6)
+   * @param {number} [forcedHeight] - optional block height anchor to scan from
+   * @param {number} [page=0] - page index for pagination
+   * @returns {Promise<Array>} list of transaction objects
+   */
+  async getTransactions(limit = 20, forcedHeight = null, page = 0) {
+    const offset = page * limit;
+    const cacheKey = `txs_feed_${limit}_${page}_${forcedHeight ?? 'latest'}`;
     const cached = this._getCached(cacheKey);
     if (cached !== undefined) return cached;
 
     return this._dedupCall(cacheKey, async () => {
-      const txList = [];
-
       try {
-        if (forcedHeight !== null && forcedHeight !== undefined) {
-          // If a forced height is specified, scan blocks starting from forcedHeight downward in parallel
-          const blocksToScan = Math.min(Math.ceil(limit / 2) + 5, 20);
-          const heights = Array.from({ length: blocksToScan }, (_, i) => forcedHeight - i).filter(h => h >= 0);
-          const blocks = await Promise.all(heights.map(h => this.getBlock(h).catch(() => null)));
+        // 0. If Supabase is configured, try querying Supabase first for instantaneous global history
+        const supabaseResult = await fetchTransactionsFromSupabase(page, limit).catch(() => null);
+        if (supabaseResult && Array.isArray(supabaseResult.transactions) && supabaseResult.transactions.length > 0) {
+          addNetworkTransactions(supabaseResult.transactions);
+          this._setCache(cacheKey, supabaseResult.transactions, 2000);
+          return supabaseResult.transactions;
+        }
 
-          for (let i = 0; i < blocks.length; i++) {
-            const block = blocks[i];
-            const h = heights[i];
-            if (!block) continue;
+        // 1. Check if local indexer already has enough transactions for this offset
+        let currentList = getNetworkTransactions(offset, limit);
+        if (currentList.length >= limit && forcedHeight === null) {
+          this._setCache(cacheKey, currentList, 2000);
+          return currentList;
+        }
 
-            const bTime = block.blockTime
-              ? (Number(block.blockTime) < 10000000000 ? Number(block.blockTime) * 1000 : Number(block.blockTime))
-              : this.getOrCreateBlockTime(h);
+        // 2. Determine scan starting height
+        let currentHeight = forcedHeight !== null && forcedHeight !== undefined
+          ? Number(forcedHeight)
+          : (await this.getBlockHeight().catch(() => 0));
 
-            if (Array.isArray(block.transactions)) {
-              for (const entry of block.transactions) {
-                const tx = entry?.transaction || {};
-                const meta = entry?.meta || {};
-                const accountKeys = tx.message?.accountKeys || [];
-                const sig = (tx.signatures && tx.signatures[0]) || tx.signature || null;
-                if (!sig) continue;
+        if (currentHeight > 0) {
+          // Continuous batch scan: scan blocks downward in chunks of 15 blocks (up to 120 blocks)
+          const maxScanBlocks = 120;
+          let scannedBlocks = 0;
 
-                txList.push({
-                  signature: sig,
-                  blockHeight: h,
-                  blockTime: bTime,
-                  from: accountKeys[0] || null,
-                  to: accountKeys[1] || null,
-                  instructionCount: tx.message?.instructions?.length || 0,
-                  fee: meta.fee ?? null,
-                  err: meta.err ?? null,
-                  status: meta.err ? 'failed' : 'success'
-                });
+          while (scannedBlocks < maxScanBlocks && currentHeight >= 0) {
+            const batchSize = Math.min(15, currentHeight + 1);
+            const heights = Array.from({ length: batchSize }, (_, i) => currentHeight - i);
+            
+            // Scan batch with concurrency limit 5
+            await mapWithConcurrency(heights, 5, h => this.getBlock(h).catch(() => null));
+            
+            scannedBlocks += batchSize;
+            currentHeight -= batchSize;
 
-                if (txList.length >= limit) break;
-              }
+            currentList = getNetworkTransactions(offset, limit);
+            if (currentList.length >= limit) {
+              break;
             }
-            if (txList.length >= limit) break;
           }
         }
 
-        // If block scanning resulted in fewer transactions than requested limit, supplement with native fast getTransactions RPC
-        if (txList.length < limit) {
-          const needed = limit - txList.length;
-          const seenSigs = new Set(txList.map(t => t.signature));
-
+        // 3. Supplement with native getTransactions RPC if node provides stream
+        if (currentList.length < limit) {
           const res = await this.call('getTransactions', [{}]).catch(() => null);
           const rawList = res?.value || (Array.isArray(res) ? res : []);
           
-          const filtered = rawList.filter(item => {
-            const sig = typeof item === 'string' ? item : item?.signature;
-            return sig && !seenSigs.has(sig);
-          });
-
-          const slice = filtered.slice(0, needed);
-
-          const hydrated = await Promise.all(
-            slice.map(async (item) => {
+          if (Array.isArray(rawList) && rawList.length > 0) {
+            const slice = rawList.slice(0, limit);
+            const hydrated = await mapWithConcurrency(slice, 5, async (item) => {
               const sig = typeof item === 'string' ? item : item.signature;
               if (!sig) return null;
 
-              const height = item.blockHeight || item.slot;
+              const height = item.blockHeight || item.slot || 0;
               const bTime = item.blockTime
                 ? (Number(item.blockTime) < 10000000000 ? Number(item.blockTime) * 1000 : Number(item.blockTime))
                 : this.getOrCreateBlockTime(height);
@@ -531,8 +540,8 @@ class RialoRpcClient {
                   signature: sig,
                   blockHeight: detail.block_height ?? height,
                   blockTime: bTime,
-                  from: accountKeys[0] || null,
-                  to: accountKeys[1] || null,
+                  from: (typeof accountKeys[0] === 'string' ? accountKeys[0] : accountKeys[0]?.pubkey) || null,
+                  to: (typeof accountKeys[1] === 'string' ? accountKeys[1] : accountKeys[1]?.pubkey) || null,
                   instructionCount: tx.message?.instructions?.length || 0,
                   fee: meta.fee ?? null,
                   err: meta.err ?? null,
@@ -547,22 +556,23 @@ class RialoRpcClient {
                 from: null,
                 to: null,
                 instructionCount: 0,
-                fee: 5000,
+                fee: null,
                 err: null,
                 status: 'success'
               };
-            })
-          );
+            });
 
-          hydrated.filter(Boolean).forEach(t => txList.push(t));
+            addNetworkTransactions(hydrated.filter(Boolean));
+          }
         }
-      } catch (err) {
-        console.error('Failed to get transactions:', err);
-      }
 
-      const result = txList.slice(0, limit);
-      this._setCache(cacheKey, result, 3000);
-      return result;
+        currentList = getNetworkTransactions(offset, limit);
+        this._setCache(cacheKey, currentList, 2500);
+        return currentList;
+      } catch (err) {
+        console.error('Failed to get network transactions:', err);
+        return getNetworkTransactions(offset, limit);
+      }
     });
   }
 
