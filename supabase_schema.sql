@@ -80,7 +80,7 @@ CREATE POLICY "Allow public read on indexer_state" ON public.indexer_state FOR S
 -- using the Supabase Service Role Key (which automatically bypasses RLS).
 -- No public write policies are permitted for security and data integrity.
 
--- 5. Helper Functions for Atomic Distributed Lock (Callable via Supabase RPC or Direct SQL)
+-- 5. Helper Functions for Atomic Distributed Lock (Strictly Protected for service_role Only)
 CREATE OR REPLACE FUNCTION public.acquire_sync_lock(lock_seconds INT DEFAULT 300)
 RETURNS BOOLEAN
 LANGUAGE plpgsql
@@ -105,6 +105,10 @@ BEGIN
 END;
 $$;
 
+-- Restrict function execution: Only backend service_role is allowed to call lock functions
+REVOKE EXECUTE ON FUNCTION public.acquire_sync_lock(INT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.acquire_sync_lock(INT) TO service_role;
+
 CREATE OR REPLACE FUNCTION public.renew_sync_lock(lock_seconds INT DEFAULT 300)
 RETURNS VOID
 LANGUAGE plpgsql
@@ -119,6 +123,9 @@ BEGIN
     WHERE id = 'main_crawler';
 END;
 $$;
+
+REVOKE EXECUTE ON FUNCTION public.renew_sync_lock(INT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.renew_sync_lock(INT) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.release_sync_lock(new_last_scanned BIGINT DEFAULT NULL, tx_increment BIGINT DEFAULT 0)
 RETURNS VOID
@@ -136,6 +143,9 @@ BEGIN
     WHERE id = 'main_crawler';
 END;
 $$;
+
+REVOKE EXECUTE ON FUNCTION public.release_sync_lock(BIGINT, BIGINT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.release_sync_lock(BIGINT, BIGINT) TO service_role;
 
 -- ============================================================
 -- OPTIONAL: RESET / AUDIT DATABASE (Clear potentially tampered test data)
