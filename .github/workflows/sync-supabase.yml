@@ -1,0 +1,70 @@
+name: Rialo Blockchain -> Supabase Sync Worker
+
+on:
+  schedule:
+    # Run periodically every 15 minutes
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    # Manual execution with customizable backfill inputs
+    inputs:
+      clean:
+        description: 'Clean Wipe: Delete old database rows before starting'
+        required: false
+        type: boolean
+        default: false
+      from_block:
+        description: 'Start Block Height (e.g. 0 for full Genesis backfill, leave empty for resume)'
+        required: false
+        type: string
+        default: ''
+      batch_size:
+        description: 'Batch Size (Blocks per batch)'
+        required: false
+        type: string
+        default: '25'
+      delay_ms:
+        description: 'Throttle delay in milliseconds between batches'
+        required: false
+        type: string
+        default: '200'
+
+jobs:
+  sync:
+    name: Sync Blockchain Data to Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Run Sync Worker
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          RPC_URL: ${{ secrets.RPC_URL || 'https://testnet.rialo.io:4101' }}
+        run: |
+          ARGS=""
+          if [ "${{ github.event.inputs.clean }}" = "true" ]; then
+            ARGS="$ARGS --clean"
+          fi
+          if [ -n "${{ github.event.inputs.from_block }}" ]; then
+            ARGS="$ARGS --from=${{ github.event.inputs.from_block }}"
+          fi
+          if [ -n "${{ github.event.inputs.batch_size }}" ]; then
+            ARGS="$ARGS --batch-size=${{ github.event.inputs.batch_size }}"
+          fi
+          if [ -n "${{ github.event.inputs.delay_ms }}" ]; then
+            ARGS="$ARGS --delay=${{ github.event.inputs.delay_ms }}"
+          fi
+          echo "Executing: node scripts/sync_to_supabase.js $ARGS"
+          node scripts/sync_to_supabase.js $ARGS
