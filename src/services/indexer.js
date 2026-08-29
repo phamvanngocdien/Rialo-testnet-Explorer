@@ -5,8 +5,6 @@
  * real on-chain transactions discovered across the Rialo network.
  */
 
-import { syncTransactionsToSupabase } from './supabase.js';
-
 const STORAGE_KEY_NETWORK_TXS = 'rialo_network_txs_v2';
 const MAX_CACHED_TXS = 3000;
 
@@ -84,8 +82,6 @@ export function addNetworkTransactions(newTxs) {
 
   if (hasNew) {
     saveNetworkTransactions();
-    // Auto sync to Supabase database if configured
-    syncTransactionsToSupabase(newTxs);
   }
 }
 
