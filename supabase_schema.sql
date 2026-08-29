@@ -36,17 +36,24 @@ CREATE TABLE IF NOT EXISTS public.account_transactions (
 
 CREATE INDEX IF NOT EXISTS idx_acct_tx_address ON public.account_transactions (address, block_height DESC);
 
--- 3. Create Indexer Sync Tracker Table
+-- 3. Create Indexer Sync Tracker Table (with Distributed Lock & Stats)
 CREATE TABLE IF NOT EXISTS public.indexer_state (
     id TEXT PRIMARY KEY DEFAULT 'main_crawler',
     last_scanned_block BIGINT DEFAULT 0,
     total_indexed_transactions BIGINT DEFAULT 0,
+    is_syncing BOOLEAN DEFAULT FALSE,
+    sync_locked_until TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Ensure lock columns exist if upgrading from earlier schema
+ALTER TABLE public.indexer_state ADD COLUMN IF NOT EXISTS is_syncing BOOLEAN DEFAULT FALSE;
+ALTER TABLE public.indexer_state ADD COLUMN IF NOT EXISTS sync_locked_until TIMESTAMPTZ DEFAULT NOW();
+ALTER TABLE public.indexer_state ADD COLUMN IF NOT EXISTS total_indexed_transactions BIGINT DEFAULT 0;
+
 -- Insert default indexer state if not exists
-INSERT INTO public.indexer_state (id, last_scanned_block, total_indexed_transactions)
-VALUES ('main_crawler', 0, 0)
+INSERT INTO public.indexer_state (id, last_scanned_block, total_indexed_transactions, is_syncing, sync_locked_until)
+VALUES ('main_crawler', 0, 0, FALSE, NOW())
 ON CONFLICT (id) DO NOTHING;
 
 -- 4. Enable Row Level Security (RLS) & Allow Public Read Access
@@ -54,13 +61,87 @@ ALTER TABLE public.transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.account_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.indexer_state ENABLE ROW LEVEL SECURITY;
 
--- Allow anyone to read data (Explorer Frontend)
+-- Clean up any legacy anon write policies (SECURITY HARDENING)
+DROP POLICY IF EXISTS "Allow anon insert on transactions" ON public.transactions;
+DROP POLICY IF EXISTS "Allow anon update on transactions" ON public.transactions;
+DROP POLICY IF EXISTS "Allow anon insert on account_transactions" ON public.account_transactions;
+DROP POLICY IF EXISTS "Allow anon insert on indexer_state" ON public.indexer_state;
+DROP POLICY IF EXISTS "Allow anon all on indexer_state" ON public.indexer_state;
+DROP POLICY IF EXISTS "Allow public read on transactions" ON public.transactions;
+DROP POLICY IF EXISTS "Allow public read on account_transactions" ON public.account_transactions;
+DROP POLICY IF EXISTS "Allow public read on indexer_state" ON public.indexer_state;
+
+-- Allow anyone to read data (Explorer Frontend using public anon key)
 CREATE POLICY "Allow public read on transactions" ON public.transactions FOR SELECT USING (true);
 CREATE POLICY "Allow public read on account_transactions" ON public.account_transactions FOR SELECT USING (true);
 CREATE POLICY "Allow public read on indexer_state" ON public.indexer_state FOR SELECT USING (true);
 
--- Allow insert/upsert from anon key or authenticated service
-CREATE POLICY "Allow anon insert on transactions" ON public.transactions FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow anon update on transactions" ON public.transactions FOR UPDATE USING (true);
-CREATE POLICY "Allow anon insert on account_transactions" ON public.account_transactions FOR INSERT WITH CHECK (true);
-CREATE POLICY "Allow anon insert on indexer_state" ON public.indexer_state FOR ALL USING (true);
+-- NOTE: All INSERT/UPDATE/DELETE operations MUST be executed via Backend Workers / GitHub Actions
+-- using the Supabase Service Role Key (which automatically bypasses RLS).
+-- No public write policies are permitted for security and data integrity.
+
+-- 5. Helper Functions for Atomic Distributed Lock (Callable via Supabase RPC or Direct SQL)
+CREATE OR REPLACE FUNCTION public.acquire_sync_lock(lock_seconds INT DEFAULT 300)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    acquired BOOLEAN := FALSE;
+BEGIN
+    UPDATE public.indexer_state
+    SET 
+        sync_locked_until = NOW() + (lock_seconds || ' seconds')::INTERVAL,
+        is_syncing = TRUE,
+        updated_at = NOW()
+    WHERE id = 'main_crawler'
+      AND (sync_locked_until IS NULL OR sync_locked_until < NOW());
+      
+    IF FOUND THEN
+        acquired := TRUE;
+    END IF;
+    
+    RETURN acquired;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.renew_sync_lock(lock_seconds INT DEFAULT 300)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+    UPDATE public.indexer_state
+    SET 
+        sync_locked_until = NOW() + (lock_seconds || ' seconds')::INTERVAL,
+        is_syncing = TRUE,
+        updated_at = NOW()
+    WHERE id = 'main_crawler';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.release_sync_lock(new_last_scanned BIGINT DEFAULT NULL, tx_increment BIGINT DEFAULT 0)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+    UPDATE public.indexer_state
+    SET 
+        last_scanned_block = COALESCE(new_last_scanned, last_scanned_block),
+        total_indexed_transactions = total_indexed_transactions + GREATEST(0, tx_increment),
+        is_syncing = FALSE,
+        sync_locked_until = NOW(),
+        updated_at = NOW()
+    WHERE id = 'main_crawler';
+END;
+$$;
+
+-- ============================================================
+-- OPTIONAL: RESET / AUDIT DATABASE (Clear potentially tampered test data)
+-- Uncomment and run if anon write was previously active and you want a fresh start:
+--
+-- TRUNCATE TABLE public.account_transactions CASCADE;
+-- TRUNCATE TABLE public.transactions CASCADE;
+-- UPDATE public.indexer_state SET last_scanned_block = 0, total_indexed_transactions = 0, is_syncing = false, sync_locked_until = NOW() WHERE id = 'main_crawler';
+-- ============================================================
