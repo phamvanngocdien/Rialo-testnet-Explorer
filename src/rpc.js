@@ -6,9 +6,11 @@
 
 import { mapWithConcurrency } from './utils.js';
 import { registerBlockTransactions, addNetworkTransactions, getNetworkTransactions, getTotalKnownTransactions } from './services/indexer.js';
-import { fetchTransactionsFromSupabase } from './services/supabase.js';
+import { fetchTransactionsFromSupabase, fetchTotalTransactionCountFromSupabase } from './services/supabase.js';
 
 export const TESTNET_RPC_URL = import.meta.env.VITE_RPC_URL || 'https://testnet.rialo.io:4101';
+
+const STORAGE_KEY_PAGE_CURSORS = 'rialo_tx_page_cursors_v2';
 
 class RialoRpcClient {
   constructor() {
@@ -24,6 +26,11 @@ class RialoRpcClient {
     // Block time registry for accurate real-time relative ages
     this._blockTimes = new Map();
 
+    // Cursor tracking for continuous backwards fallback scan
+    this._lowestScannedBlock = null;
+    this._pageCursorMap = new Map();
+    this._initPageCursors();
+
     // Retry configuration
     this.maxRetries = 3;
     this.retryBaseDelayMs = 300;
@@ -35,6 +42,35 @@ class RialoRpcClient {
     this.isHealthy = true;
     this._consecutiveFailures = 0;
     this._healthListeners = new Set();
+  }
+
+  _initPageCursors() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_PAGE_CURSORS);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed === 'object' && parsed !== null) {
+          Object.entries(parsed).forEach(([k, v]) => {
+            if (k !== '_lowestScannedBlock') {
+              this._pageCursorMap.set(Number(k), v);
+            }
+          });
+          if (typeof parsed._lowestScannedBlock === 'number') {
+            this._lowestScannedBlock = parsed._lowestScannedBlock;
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  _savePageCursors() {
+    try {
+      const obj = { _lowestScannedBlock: this._lowestScannedBlock };
+      for (const [k, v] of this._pageCursorMap.entries()) {
+        obj[k] = v;
+      }
+      localStorage.setItem(STORAGE_KEY_PAGE_CURSORS, JSON.stringify(obj));
+    } catch (e) {}
   }
 
   getOrCreateBlockTime(blockHeight) {
@@ -275,10 +311,22 @@ class RialoRpcClient {
     if (cached !== undefined) return cached;
 
     return this._dedupCall(cacheKey, async () => {
-      const res = await this.call('getTransactionCount');
+      // 1. Try reading O(1) count from Supabase indexer_state if available
+      const sbCount = await fetchTotalTransactionCountFromSupabase().catch(() => null);
+      if (typeof sbCount === 'number' && sbCount > 0) {
+        this._setCache(cacheKey, sbCount, 5000);
+        return sbCount;
+      }
+
+      // 2. Fallback to RPC node getTransactionCount
+      const res = await this.call('getTransactionCount').catch(() => null);
       const result = typeof res === 'object' && res?.value !== undefined ? res.value : res;
-      this._setCache(cacheKey, result, 500); // Fast TTL 500ms
-      return result;
+      if (typeof result === 'number' && result > 0) {
+        this._setCache(cacheKey, result, 500);
+        return result;
+      }
+
+      return sbCount || result || 0;
     });
   }
 
@@ -488,14 +536,26 @@ class RialoRpcClient {
           return currentList;
         }
 
-        // 2. Determine scan starting height
-        let currentHeight = forcedHeight !== null && forcedHeight !== undefined
-          ? Number(forcedHeight)
-          : (await this.getBlockHeight().catch(() => 0));
+        // 2. Fallback RPC continuous backwards scan using stateful cursor
+        const latestHeight = await this.getBlockHeight().catch(() => 0);
+        if (latestHeight > 0) {
+          let scanStartHeight;
 
-        if (currentHeight > 0) {
-          // Continuous batch scan: scan blocks downward in chunks of 15 blocks (up to 120 blocks)
-          const maxScanBlocks = 120;
+          if (forcedHeight !== null && forcedHeight !== undefined) {
+            scanStartHeight = Number(forcedHeight);
+          } else if (page === 0) {
+            scanStartHeight = latestHeight;
+          } else {
+            // For older pages (page > 0), resume continuous backwards scan from the lowest scanned block
+            if (this._lowestScannedBlock !== null && this._lowestScannedBlock > 0) {
+              scanStartHeight = this._lowestScannedBlock - 1;
+            } else {
+              scanStartHeight = latestHeight;
+            }
+          }
+
+          let currentHeight = scanStartHeight;
+          const maxScanBlocks = 90; // Scan up to 90 blocks per page batch
           let scannedBlocks = 0;
 
           while (scannedBlocks < maxScanBlocks && currentHeight >= 0) {
@@ -508,11 +568,21 @@ class RialoRpcClient {
             scannedBlocks += batchSize;
             currentHeight -= batchSize;
 
+            if (this._lowestScannedBlock === null || currentHeight < this._lowestScannedBlock) {
+              this._lowestScannedBlock = Math.max(0, currentHeight);
+            }
+
             currentList = getNetworkTransactions(offset, limit);
             if (currentList.length >= limit) {
               break;
             }
           }
+
+          this._pageCursorMap.set(page, {
+            startHeight: scanStartHeight,
+            endHeight: this._lowestScannedBlock
+          });
+          this._savePageCursors();
         }
 
         // 3. Supplement with native getTransactions RPC if node provides stream
