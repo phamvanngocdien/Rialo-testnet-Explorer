@@ -28,6 +28,11 @@ on:
         type: string
         default: '200'
 
+# Concurrency group to avoid overlapping runner slots
+concurrency:
+  group: sync-supabase
+  cancel-in-progress: false
+
 jobs:
   sync:
     name: Sync Blockchain Data to Supabase
