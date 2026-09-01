@@ -66,6 +66,14 @@ if (!SUPABASE_SERVICE_KEY) {
   process.exit(1);
 }
 
+if (typeof globalThis.WebSocket === 'undefined') {
+  globalThis.WebSocket = class DummyWebSocket {
+    constructor() {}
+    close() {}
+    send() {}
+  };
+}
+
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false }
 });

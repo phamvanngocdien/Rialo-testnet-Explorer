@@ -45,6 +45,14 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Missing SUPABASE_URL or SUPABASE_SERVICE_KEY server environment variables' });
   }
 
+  if (typeof globalThis.WebSocket === 'undefined') {
+    globalThis.WebSocket = class DummyWebSocket {
+      constructor() {}
+      close() {}
+      send() {}
+    };
+  }
+
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false }
   });
