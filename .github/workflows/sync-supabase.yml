@@ -56,7 +56,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          RPC_URL: ${{ secrets.RPC_URL }}
+          RPC_URL: 'https://testnet.rialo.io:4101'
         run: |
           ARGS=""
           if [ "${{ inputs.clean }}" = "true" ]; then
