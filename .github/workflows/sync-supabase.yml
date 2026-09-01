@@ -56,20 +56,20 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          RPC_URL: ${{ secrets.RPC_URL || 'https://testnet.rialo.io:4101' }}
+          RPC_URL: ${{ secrets.RPC_URL }}
         run: |
           ARGS=""
-          if [ "${{ github.event.inputs.clean }}" = "true" ]; then
+          if [ "${{ inputs.clean }}" = "true" ]; then
             ARGS="$ARGS --clean"
           fi
-          if [ -n "${{ github.event.inputs.from_block }}" ]; then
-            ARGS="$ARGS --from=${{ github.event.inputs.from_block }}"
+          if [ -n "${{ inputs.from_block }}" ]; then
+            ARGS="$ARGS --from=${{ inputs.from_block }}"
           fi
-          if [ -n "${{ github.event.inputs.batch_size }}" ]; then
-            ARGS="$ARGS --batch-size=${{ github.event.inputs.batch_size }}"
+          if [ -n "${{ inputs.batch_size }}" ]; then
+            ARGS="$ARGS --batch-size=${{ inputs.batch_size }}"
           fi
-          if [ -n "${{ github.event.inputs.delay_ms }}" ]; then
-            ARGS="$ARGS --delay=${{ github.event.inputs.delay_ms }}"
+          if [ -n "${{ inputs.delay_ms }}" ]; then
+            ARGS="$ARGS --delay=${{ inputs.delay_ms }}"
           fi
           echo "Executing: node scripts/sync_to_supabase.js $ARGS"
           node scripts/sync_to_supabase.js $ARGS
